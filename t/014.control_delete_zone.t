@@ -175,3 +175,111 @@ __DATA__
     'OK',
     '"processingCounts":[1-9]'
 ]
+
+
+
+=== TEST 6: delete filter zone with space
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_space {
+        set $vol "test value";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_space',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@test%20value',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 7: delete filter zone with backtick
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_backtick {
+        set $vol "test`value";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_backtick',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@test%60value',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 8: delete filter zone with pipe
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_pipe {
+        set $vol "test|value";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_pipe',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@test%7Cvalue',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 9: delete filter zone with UTF-8 Chinese
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_chinese {
+        set $vol "商标";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_chinese',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@%E5%95%86%E6%A0%87',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
