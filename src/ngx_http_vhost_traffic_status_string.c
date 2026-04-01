@@ -261,4 +261,41 @@ ngx_http_vhost_traffic_status_escape_prometheus(ngx_pool_t *pool, ngx_str_t *buf
     return NGX_OK;
 }
 
+ngx_int_t
+ngx_http_vhost_traffic_status_url_decode(ngx_str_t *buf)
+{
+    u_char     *p, *dst;
+    size_t      len;
+    ngx_int_t   hi, lo;
+
+    p = buf->data;
+    dst = buf->data;
+    len = buf->len;
+
+    while (len > 0) {
+        if (*p == '%' && len >= 3) {
+            hi = ngx_hextoi(p + 1, 1);
+            lo = ngx_hextoi(p + 2, 1);
+            if (hi != NGX_ERROR && lo != NGX_ERROR) {
+                *dst++ = (u_char) ((hi << 4) | lo);
+                p += 3;
+                len -= 3;
+                continue;
+            }
+        } else if (*p == '+') {
+            *dst++ = ' ';
+            p++;
+            len--;
+            continue;
+        }
+
+        *dst++ = *p++;
+        len--;
+    }
+
+    buf->len = dst - buf->data;
+    return NGX_OK;
+}
+
+
 /* vi:set ft=c ts=4 sw=4 et fdm=marker: */
