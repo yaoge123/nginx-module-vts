@@ -216,6 +216,64 @@ ngx_http_vhost_traffic_status_display_handler_control(ngx_http_request_t *r)
                               "display_handler_control::replace_strc() failed");
             }
 
+            /* Decode additional percent-encoded characters for zone names */
+            
+            /* Space (%20) - e.g., "armbian noble" */
+            ngx_str_set(&encoded_ch, "%20");
+            rc = ngx_http_vhost_traffic_status_replace_strc(control->zone, &encoded_ch, ' ');
+            if (rc != NGX_OK) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "display_handler_control::replace_strc() failed");
+            }
+
+            /* Backtick (%60) - e.g., golang`, crates.io-index` */
+            ngx_str_set(&encoded_ch, "%60");
+            rc = ngx_http_vhost_traffic_status_replace_strc(control->zone, &encoded_ch, '`');
+            if (rc != NGX_OK) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "display_handler_control::replace_strc() failed");
+            }
+
+            /* Pipe (%7C) - e.g., immortalwrt|g */
+            ngx_str_set(&encoded_ch, "%7C");
+            rc = ngx_http_vhost_traffic_status_replace_strc(control->zone, &encoded_ch, '|');
+            if (rc != NGX_OK) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "display_handler_control::replace_strc() failed");
+            }
+
+            /* Ampersand (%26) - e.g., gentoo-zh&amp; */
+            ngx_str_set(&encoded_ch, "%26");
+            rc = ngx_http_vhost_traffic_status_replace_strc(control->zone, &encoded_ch, '&');
+            if (rc != NGX_OK) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "display_handler_control::replace_strc() failed");
+            }
+
+            /* Backslash (%5C) - e.g., \, \..\.. */
+            ngx_str_set(&encoded_ch, "%5C");
+            rc = ngx_http_vhost_traffic_status_replace_strc(control->zone, &encoded_ch, '\\');
+            if (rc != NGX_OK) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "display_handler_control::replace_strc() failed");
+            }
+
+            /* Double quote (%22) */
+            ngx_str_set(&encoded_ch, "%22");
+            rc = ngx_http_vhost_traffic_status_replace_strc(control->zone, &encoded_ch, '"');
+            if (rc != NGX_OK) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "display_handler_control::replace_strc() failed");
+            }
+
+            /* Single quote (%27) */
+            ngx_str_set(&encoded_ch, "%27");
+            rc = ngx_http_vhost_traffic_status_replace_strc(control->zone, &encoded_ch, '\'');
+            if (rc != NGX_OK) {
+                ngx_log_error(NGX_LOG_ERR, r->connection->log, 0,
+                              "display_handler_control::replace_strc() failed");
+            }
+
             (void) ngx_http_vhost_traffic_status_replace_chrc(control->zone, '@',
                        NGX_HTTP_VHOST_TRAFFIC_STATUS_KEY_SEPARATOR);
 
