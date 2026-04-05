@@ -9,6 +9,8 @@ run_tests();
 __DATA__
 
 === TEST 1: /status/control?cmd=delete&group=server&zone=localhost
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
 --- http_config
     vhost_traffic_status_zone;
 --- config
@@ -35,6 +37,8 @@ __DATA__
 
 
 === TEST 2: /status/control?cmd=delete&group=filter&zone=storage::localhost@vol0
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
 --- http_config
     vhost_traffic_status_zone;
 --- config
@@ -65,6 +69,8 @@ __DATA__
 
 
 === TEST 3: /status/control?cmd=delete&group=upstream@group&zone=backend@127.0.0.1:80
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
 --- http_config
     vhost_traffic_status_zone;
     upstream backend {
@@ -101,6 +107,8 @@ __DATA__
 
 
 === TEST 4: /status/control?cmd=delete&group=upstream@alone&zone=127.0.0.1:1981
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
 --- http_config
     vhost_traffic_status_zone;
 --- config
@@ -130,6 +138,8 @@ __DATA__
 
 
 === TEST 5: /status/control?cmd=delete&group=cache&zone=cache_one
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
 --- http_config
     vhost_traffic_status_zone;
     proxy_cache_path /tmp/cache_one levels=1:2 keys_zone=cache_one:2m inactive=1m max_size=4m;
@@ -172,6 +182,209 @@ __DATA__
 --- response_body_like eval
 [
     'OK',
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 6: delete filter zone with space
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_space {
+        set $vol "test value";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_space',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@test%20value',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 7: delete filter zone with backtick
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_backtick {
+        set $vol "test`value";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_backtick',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@test%60value',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 8: delete filter zone with pipe
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_pipe {
+        set $vol "test|value";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_pipe',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@test%7Cvalue',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 9: delete filter zone with UTF-8 Chinese
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_utf8 {
+        set $vol "商标";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_utf8',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@%E5%95%86%E6%A0%87',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 10: plus stays plus in filter zone
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_plus {
+        set $vol "test+value";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_plus',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@test+value',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 11: encoded plus decodes to literal plus in filter zone
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_plus_encoded {
+        set $vol "test+value";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_plus_encoded',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@test%2Bvalue',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 12: malformed percent encoding is left untouched
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_malformed_percent {
+        set $vol "test%2Gvalue";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_malformed_percent',
+    'GET /status/control?cmd=delete&group=filter&zone=storage::localhost@test%2Gvalue',
+]
+--- response_body_like eval
+[
     'OK',
     '"processingCounts":[1-9]'
 ]

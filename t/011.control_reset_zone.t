@@ -9,6 +9,8 @@ run_tests();
 __DATA__
 
 === TEST 1: /status/control?cmd=reset&group=server&zone=localhost
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
 --- http_config
     vhost_traffic_status_zone;
 --- config
@@ -35,6 +37,8 @@ __DATA__
 
 
 === TEST 2: /status/control?cmd=reset&group=filter&zone=storage::localhost@vol0
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
 --- http_config
     vhost_traffic_status_zone;
 --- config
@@ -65,6 +69,8 @@ __DATA__
 
 
 === TEST 3: /status/control?cmd=reset&group=upstream@group&zone=backend@127.0.0.1:80
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
 --- http_config
     vhost_traffic_status_zone;
     upstream backend {
@@ -101,6 +107,8 @@ __DATA__
 
 
 === TEST 4: /status/control?cmd=reset&group=upstream@alone&zone=127.0.0.1:1981
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
 --- http_config
     vhost_traffic_status_zone;
 --- config
@@ -130,6 +138,8 @@ __DATA__
 
 
 === TEST 5: /status/control?cmd=reset&group=cache&zone=cache_one
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
 --- http_config
     vhost_traffic_status_zone;
     proxy_cache_path /tmp/cache_one levels=1:2 keys_zone=cache_one:2m inactive=1m max_size=4m;
@@ -172,6 +182,64 @@ __DATA__
 --- response_body_like eval
 [
     'OK',
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 6: plus stays plus in filter zone
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_plus_literal {
+        set $vol "test+value";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_plus_literal',
+    'GET /status/control?cmd=reset&group=filter&zone=storage::localhost@test+value',
+]
+--- response_body_like eval
+[
+    'OK',
+    '"processingCounts":[1-9]'
+]
+
+
+
+=== TEST 7: encoded plus decodes to literal plus in filter zone
+--- main_config
+    load_module /usr/lib/nginx/modules/ngx_http_vhost_traffic_status_module.so;
+--- http_config
+    vhost_traffic_status_zone;
+--- config
+    location /status {
+        vhost_traffic_status_display;
+        vhost_traffic_status_display_format json;
+        access_log off;
+    }
+    location /test_plus_encoded {
+        set $vol "test+value";
+        vhost_traffic_status_filter_by_set_key $vol storage::$server_name;
+        return 200 "filter:OK";
+    }
+--- request eval
+[
+    'GET /test_plus_encoded',
+    'GET /status/control?cmd=reset&group=filter&zone=storage::localhost@test%2Bvalue',
+]
+--- response_body_like eval
+[
     'OK',
     '"processingCounts":[1-9]'
 ]
