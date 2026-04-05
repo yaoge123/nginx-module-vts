@@ -1,6 +1,10 @@
 <a name="unreleased"></a>
 ## [Unreleased]
 
+### Changed
+- Percent-decode control `group` and `zone` arguments before lookup; a literal
+  `%` in a group or zone name must now be sent as `%25`.
+
 
 ## [v0.2.7] - 2026-08-09
 ### Chore
