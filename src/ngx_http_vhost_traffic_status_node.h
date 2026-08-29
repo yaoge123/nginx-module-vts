@@ -47,6 +47,34 @@ typedef struct {
 } ngx_http_vhost_traffic_status_node_upstream_t;
 
 
+/*
+   Holds the counters that ngx_http_vhost_traffic_status_add_oc() compares.
+   Taking a copy of the whole node just to detect the wrap of these counters
+   would copy a few kilobytes while the shared memory is locked.
+*/
+typedef struct {
+    ngx_atomic_t                                           stat_request_counter;
+    ngx_atomic_t                                           stat_in_bytes;
+    ngx_atomic_t                                           stat_out_bytes;
+    ngx_atomic_t                                           stat_1xx_counter;
+    ngx_atomic_t                                           stat_2xx_counter;
+    ngx_atomic_t                                           stat_3xx_counter;
+    ngx_atomic_t                                           stat_4xx_counter;
+    ngx_atomic_t                                           stat_5xx_counter;
+    ngx_atomic_t                                           stat_request_time_counter;
+#if (NGX_HTTP_CACHE)
+    ngx_atomic_t                                           stat_cache_miss_counter;
+    ngx_atomic_t                                           stat_cache_bypass_counter;
+    ngx_atomic_t                                           stat_cache_expired_counter;
+    ngx_atomic_t                                           stat_cache_stale_counter;
+    ngx_atomic_t                                           stat_cache_updating_counter;
+    ngx_atomic_t                                           stat_cache_revalidated_counter;
+    ngx_atomic_t                                           stat_cache_hit_counter;
+    ngx_atomic_t                                           stat_cache_scarce_counter;
+#endif
+} ngx_http_vhost_traffic_status_node_oc_t;
+
+
 typedef struct {
     u_char                                                 color;
     ngx_atomic_t                                           stat_request_counter;
@@ -61,7 +89,21 @@ typedef struct {
     ngx_atomic_t                                           *stat_status_code_counter;
 
     ngx_atomic_t                                           stat_request_time_counter;
-    ngx_msec_t                                             stat_request_time;
+
+    /*
+       When the node was last reached, in milliseconds since the epoch. It is
+       written for every request, before the check that ignore_status makes,
+       so it says when the zone was last served rather than when it was last
+       counted. Nothing else here can stand in for it: the time queue holds
+       what was counted, which is not the same thing, and the readers of it
+       pair each timestamp with a duration.
+
+       It sits where stat_request_time used to. That field held the duration
+       of the first request and nothing read it - the one variable that names
+       it, $vts_request_time, uses the offset to recognise itself and then
+       averages the queue.
+    */
+    ngx_msec_t                                             stat_last_seen;
     ngx_http_vhost_traffic_status_node_time_queue_t        stat_request_times;
     ngx_http_vhost_traffic_status_node_histogram_bucket_t  stat_request_buckets;
 
@@ -116,12 +158,20 @@ ngx_rbtree_node_t *ngx_http_vhost_traffic_status_node_lookup(
     ngx_rbtree_t *rbtree, ngx_str_t *key, uint32_t hash);
 void ngx_http_vhost_traffic_status_node_zero(
     ngx_http_vhost_traffic_status_node_t *vtsn);
+/*
+ * state is the upstream attempt being counted, and it is set only for an
+ * attempt that proxy_next_upstream passed on to another peer. NULL counts the
+ * client request, which is what every other caller wants.
+ */
 void ngx_http_vhost_traffic_status_node_init(ngx_http_request_t *r,
-    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_int_t status_code_slot);
+    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_int_t status_code_slot,
+    ngx_http_upstream_state_t *state);
 void ngx_http_vhost_traffic_status_node_set(ngx_http_request_t *r,
-    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_int_t status_code_slot);
+    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_int_t status_code_slot,
+    ngx_http_upstream_state_t *state);
 void ngx_http_vhost_traffic_status_node_update(ngx_http_request_t *r,
-    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_msec_int_t ms, ngx_int_t status_code_slot);
+    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_msec_int_t ms, ngx_int_t status_code_slot,
+    ngx_http_upstream_state_t *state);
 
 void ngx_http_vhost_traffic_status_node_time_queue_zero(
     ngx_http_vhost_traffic_status_node_time_queue_t *q);
@@ -136,10 +186,10 @@ ngx_int_t ngx_http_vhost_traffic_status_node_time_queue_push(
 ngx_int_t ngx_http_vhost_traffic_status_node_time_queue_pop(
     ngx_http_vhost_traffic_status_node_time_queue_t *q,
     ngx_http_vhost_traffic_status_node_time_t *x);
-ngx_int_t ngx_http_vhost_traffic_status_node_time_queue_rear(
-    ngx_http_vhost_traffic_status_node_time_queue_t *q);
-
 ngx_msec_t ngx_http_vhost_traffic_status_node_time_queue_average(
+    ngx_http_vhost_traffic_status_node_time_queue_t *q,
+    ngx_int_t method, ngx_msec_t period);
+ngx_msec_t ngx_http_vhost_traffic_status_node_time_queue_average_ro(
     ngx_http_vhost_traffic_status_node_time_queue_t *q,
     ngx_int_t method, ngx_msec_t period);
 ngx_msec_t ngx_http_vhost_traffic_status_node_time_queue_amm(
@@ -166,7 +216,10 @@ void ngx_http_vhost_traffic_status_find_name(ngx_http_request_t *r,
 ngx_rbtree_node_t *ngx_http_vhost_traffic_status_find_node(ngx_http_request_t *r,
     ngx_str_t *key, unsigned type, uint32_t key_hash);
 
-ngx_rbtree_node_t *ngx_http_vhost_traffic_status_find_lru(ngx_http_request_t *r);
+ngx_uint_t ngx_http_vhost_traffic_status_node_filter_count(ngx_http_request_t *r,
+    ngx_rbtree_node_t *node);
+ngx_rbtree_node_t *ngx_http_vhost_traffic_status_find_lru(ngx_http_request_t *r,
+    unsigned type, ngx_str_t *key);
 ngx_rbtree_node_t *ngx_http_vhost_traffic_status_find_lru_node(ngx_http_request_t *r,
     ngx_rbtree_node_t *a, ngx_rbtree_node_t *b);
 ngx_rbtree_node_t *ngx_http_vhost_traffic_status_find_lru_node_cmp(ngx_http_request_t *r,

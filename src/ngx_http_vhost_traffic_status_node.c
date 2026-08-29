@@ -99,13 +99,11 @@ ngx_rbtree_node_t *
 ngx_http_vhost_traffic_status_find_node(ngx_http_request_t *r,
     ngx_str_t *key, unsigned type, uint32_t key_hash)
 {
-    uint32_t                                   hash;
-    ngx_rbtree_node_t                         *node;
-    ngx_http_vhost_traffic_status_ctx_t       *ctx;
-    ngx_http_vhost_traffic_status_loc_conf_t  *vtscf;
+    uint32_t                              hash;
+    ngx_rbtree_node_t                    *node;
+    ngx_http_vhost_traffic_status_ctx_t  *ctx;
 
     ctx = ngx_http_get_module_main_conf(r, ngx_http_vhost_traffic_status_module);
-    vtscf = ngx_http_get_module_loc_conf(r, ngx_http_vhost_traffic_status_module);
 
     hash = key_hash;
 
@@ -113,27 +111,118 @@ ngx_http_vhost_traffic_status_find_node(ngx_http_request_t *r,
         hash = ngx_crc32_short(key->data, key->len);
     }
 
-    if (vtscf->node_caches[type] != NULL) {
-        if (vtscf->node_caches[type]->key == hash) {
-            node = vtscf->node_caches[type];
-            goto found;
-        }
-    }
-
     node = ngx_http_vhost_traffic_status_node_lookup(ctx->rbtree, key, hash);
-
-found:
 
     return node;
 }
 
 
-ngx_rbtree_node_t *
-ngx_http_vhost_traffic_status_find_lru(ngx_http_request_t *r)
+/* whether this node is one of the ones the cap counts */
+
+ngx_int_t
+ngx_http_vhost_traffic_status_node_filter_counted(
+    ngx_http_vhost_traffic_status_ctx_t *ctx,
+    ngx_http_vhost_traffic_status_node_t *vtsn)
 {
+    ngx_str_t  filter;
+
+    if (vtsn->stat_upstream.type != NGX_HTTP_VHOST_TRAFFIC_STATUS_UPSTREAM_FG) {
+        return NGX_DECLINED;
+    }
+
+    filter.data = vtsn->data;
+    filter.len = vtsn->len;
+
+    if (ngx_http_vhost_traffic_status_node_position_key(&filter, 1) != NGX_OK) {
+        return NGX_DECLINED;
+    }
+
+    if (ngx_http_vhost_traffic_status_filter_max_node_match_ctx(ctx, &filter)
+        != NGX_OK)
+    {
+        return NGX_DECLINED;
+    }
+
+    return NGX_OK;
+}
+
+
+/*
+ * Everything that puts a node into the tree or takes one out comes through
+ * here, with the mutex of the zone held.
+ *
+ * The signature is checked on the way in rather than only where the count is
+ * read. A reload is graceful: for a while the old workers and the new ones
+ * are both serving from this zone, and they do not agree on which nodes the
+ * cap counts. A worker that finds a count belonging to someone else's
+ * configuration must not add to it or take from it - it gives up on the
+ * count instead, and whoever reads it next builds a new one.
+ */
+
+void
+ngx_http_vhost_traffic_status_node_filter_account(
+    ngx_http_vhost_traffic_status_ctx_t *ctx,
+    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_int_t delta)
+{
+    if (ctx->shm == NULL) {
+        return;
+    }
+
+    if (ctx->shm->signature != ctx->signature) {
+        ctx->shm->signature = 0;
+        return;
+    }
+
+    if (ngx_http_vhost_traffic_status_node_filter_counted(ctx, vtsn)
+        != NGX_OK)
+    {
+        return;
+    }
+
+    if (delta > 0) {
+        ctx->shm->filter_nodes++;
+
+    } else if (ctx->shm->filter_nodes > 0) {
+        ctx->shm->filter_nodes--;
+    }
+}
+
+
+/* only for the count that a change of configuration has invalidated */
+
+ngx_uint_t
+ngx_http_vhost_traffic_status_node_filter_count(ngx_http_request_t *r,
+    ngx_rbtree_node_t *node)
+{
+    ngx_uint_t                             n;
+    ngx_http_vhost_traffic_status_ctx_t   *ctx;
+    ngx_http_vhost_traffic_status_node_t  *vtsn;
+
+    ctx = ngx_http_get_module_main_conf(r, ngx_http_vhost_traffic_status_module);
+
+    if (node == ctx->rbtree->sentinel) {
+        return 0;
+    }
+
+    vtsn = (ngx_http_vhost_traffic_status_node_t *) &node->color;
+
+    n = ngx_http_vhost_traffic_status_node_filter_counted(ctx, vtsn) == NGX_OK
+        ? 1 : 0;
+
+    return n
+           + ngx_http_vhost_traffic_status_node_filter_count(r, node->left)
+           + ngx_http_vhost_traffic_status_node_filter_count(r, node->right);
+}
+
+
+ngx_rbtree_node_t *
+ngx_http_vhost_traffic_status_find_lru(ngx_http_request_t *r, unsigned type,
+    ngx_str_t *key)
+{
+    ngx_str_t                                  filter;
+    ngx_uint_t                                 used;
     ngx_rbtree_node_t                         *node;
     ngx_http_vhost_traffic_status_ctx_t       *ctx;
-    ngx_http_vhost_traffic_status_shm_info_t  *shm_info;
 
     ctx = ngx_http_get_module_main_conf(r, ngx_http_vhost_traffic_status_module);
     node = NULL;
@@ -143,16 +232,58 @@ ngx_http_vhost_traffic_status_find_lru(ngx_http_request_t *r)
         return NULL;
     }
 
-    shm_info = ngx_pcalloc(r->pool, sizeof(ngx_http_vhost_traffic_status_shm_info_t));
+    /*
+     * The cap counts the nodes of the filter groups the directive names, so
+     * only an insertion into one of those groups can take it over. A server
+     * zone, an upstream peer, a cache or a filter of a group the directive
+     * does not name has nothing to do with it, and dropping a node for one
+     * of them loses a measurement while the zone still has room.
+     */
 
-    if (shm_info == NULL) { 
+    if (type != NGX_HTTP_VHOST_TRAFFIC_STATUS_UPSTREAM_FG) {
         return NULL;
     }
 
-    ngx_http_vhost_traffic_status_shm_info(r, shm_info);
+    filter = *key;
+
+    if (ngx_http_vhost_traffic_status_node_position_key(&filter, 1) != NGX_OK) {
+        return NULL;
+    }
+
+    if (ngx_http_vhost_traffic_status_filter_max_node_match(r, &filter) != NGX_OK) {
+        return NULL;
+    }
+
+    /*
+     * The count used to be made here, by walking the whole tree, before it
+     * had even been compared against the cap - so the walk was paid on every
+     * insertion whether or not the cap was anywhere near. It is kept in the
+     * zone now, under the mutex this is already called with.
+     */
+
+    if (ctx->shm == NULL) {
+
+        /* nowhere to keep it, so it is counted the way it always was */
+
+        used = ngx_http_vhost_traffic_status_node_filter_count(r,
+                   ctx->rbtree->root);
+
+    } else {
+        if (ctx->shm->signature != ctx->signature) {
+
+            /* the configuration it was made under is not this one */
+
+            ctx->shm->filter_nodes =
+                ngx_http_vhost_traffic_status_node_filter_count(r,
+                    ctx->rbtree->root);
+            ctx->shm->signature = ctx->signature;
+        }
+
+        used = ctx->shm->filter_nodes;
+    }
 
     /* find */
-    if (shm_info->filter_used_node >= ctx->filter_max_node) {
+    if (used >= ctx->filter_max_node) {
         node = ngx_http_vhost_traffic_status_find_lru_node(r, NULL, ctx->rbtree->root);
     }
 
@@ -196,9 +327,7 @@ ngx_rbtree_node_t *
 ngx_http_vhost_traffic_status_find_lru_node_cmp(ngx_http_request_t *r,
     ngx_rbtree_node_t *a, ngx_rbtree_node_t *b)
 {
-    ngx_int_t                                         ai, bi;
-    ngx_http_vhost_traffic_status_node_t             *avtsn, *bvtsn;
-    ngx_http_vhost_traffic_status_node_time_queue_t  *aq, *bq;
+    ngx_http_vhost_traffic_status_node_t  *avtsn, *bvtsn;
 
     if (a == NULL) {
         return b;
@@ -207,21 +336,13 @@ ngx_http_vhost_traffic_status_find_lru_node_cmp(ngx_http_request_t *r,
     avtsn = (ngx_http_vhost_traffic_status_node_t *) &a->color;
     bvtsn = (ngx_http_vhost_traffic_status_node_t *) &b->color;
 
-    aq = &avtsn->stat_request_times;
-    bq = &bvtsn->stat_request_times;
+    /*
+     * This used to read the last entry of the time queue, which a zone whose
+     * statuses ignore_status excludes never fills, so such a zone was always
+     * the one chosen to go however much traffic it was carrying.
+     */
 
-    if (aq->front == aq->rear) {
-        return a;
-    }
-
-    if (bq->front == bq->rear) {
-        return b;
-    }
-
-    ai = ngx_http_vhost_traffic_status_node_time_queue_rear(aq);
-    bi = ngx_http_vhost_traffic_status_node_time_queue_rear(bq);
-
-    return (aq->times[ai].time < bq->times[bi].time) ? a : b;
+    return (avtsn->stat_last_seen < bvtsn->stat_last_seen) ? a : b;
 }
 
 
@@ -279,7 +400,7 @@ ngx_http_vhost_traffic_status_node_zero(ngx_http_vhost_traffic_status_node_t *vt
     vtsn->stat_5xx_counter = 0;
 
     vtsn->stat_request_time_counter = 0;
-    vtsn->stat_request_time = 0;
+    vtsn->stat_last_seen = 0;
     vtsn->stat_upstream.response_time_counter = 0;
     vtsn->stat_upstream.response_time = 0;
 
@@ -323,11 +444,11 @@ ngx_http_vhost_traffic_status_node_zero(ngx_http_vhost_traffic_status_node_t *vt
 
 /*
    Initialize the node and update it with the first request.
-   Set the `stat_request_time` to the time of the first request.
 */
 void
 ngx_http_vhost_traffic_status_node_init(ngx_http_request_t *r,
-    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_int_t status_code_slot)
+    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_int_t status_code_slot,
+    ngx_http_upstream_state_t *state)
 {
     ngx_msec_int_t  ms;
 
@@ -346,9 +467,8 @@ ngx_http_vhost_traffic_status_node_init(ngx_http_request_t *r,
 
     /* set serverZone */
     ms = ngx_http_vhost_traffic_status_request_time(r);
-    vtsn->stat_request_time = (ngx_msec_t) ms;
 
-    ngx_http_vhost_traffic_status_node_update(r, vtsn, ms, status_code_slot);
+    ngx_http_vhost_traffic_status_node_update(r, vtsn, ms, status_code_slot, state);
 }
 
 
@@ -358,23 +478,26 @@ ngx_http_vhost_traffic_status_node_init(ngx_http_request_t *r,
 */
 void
 ngx_http_vhost_traffic_status_node_set(ngx_http_request_t *r,
-    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_int_t status_code_slot)
+    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_int_t status_code_slot,
+    ngx_http_upstream_state_t *state)
 {
     ngx_msec_int_t                             ms;
-    ngx_http_vhost_traffic_status_node_t       ovtsn;
+    ngx_http_vhost_traffic_status_node_oc_t    ovtsn;
     ngx_http_vhost_traffic_status_loc_conf_t  *vtscf;
 
     vtscf = ngx_http_get_module_loc_conf(r, ngx_http_vhost_traffic_status_module);
 
-    ovtsn = *vtsn;
+    ngx_http_vhost_traffic_status_copy_oc((&ovtsn), vtsn);
 
     vtsn->ignore_status = vtscf->ignore_status;
     ms = ngx_http_vhost_traffic_status_request_time(r);
-    ngx_http_vhost_traffic_status_node_update(r, vtsn, ms, status_code_slot);
+    ngx_http_vhost_traffic_status_node_update(r, vtsn, ms, status_code_slot, state);
 
-    vtsn->stat_request_time = ngx_http_vhost_traffic_status_node_time_queue_average(
-                                  &vtsn->stat_request_times, vtscf->average_method,
-                                  vtscf->average_period);
+    /*
+     * stat_request_time is not kept up to date here: averaging the queue on
+     * every request costs a loop over the whole queue while the shared memory
+     * is locked. The readers compute it when they need it.
+     */
 
     ngx_http_vhost_traffic_status_add_oc((&ovtsn), vtsn);
 }
@@ -382,23 +505,71 @@ ngx_http_vhost_traffic_status_node_set(ngx_http_request_t *r,
 
 void
 ngx_http_vhost_traffic_status_node_update(ngx_http_request_t *r,
-    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_msec_int_t ms, ngx_int_t status_code_slot)
+    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_msec_int_t ms, ngx_int_t status_code_slot,
+    ngx_http_upstream_state_t *state)
 {
-    ngx_uint_t status = r->headers_out.status;
+    /*
+     * state is the attempt this call is counting, and it is set only where
+     * proxy_next_upstream passed that attempt on to another peer. Everything
+     * else - every server, filter and cache zone, and the attempt that did
+     * serve the client - counts the client request and leaves it NULL.
+     */
+
+    ngx_uint_t status = (state != NULL) ? state->status : r->headers_out.status;
+
+    /*
+     * Before the check below: a status that is not counted still leaves the
+     * node reached - the client request was served, or the attempt on this
+     * peer was made - and being reached is what tells it apart from one
+     * nothing has used in a long time. Being counted is not.
+     */
+
+    vtsn->stat_last_seen = ngx_http_vhost_traffic_status_current_msec();
 
     if (ngx_http_vhost_traffic_status_ignore_status(vtsn->ignore_status, status)) {
         return;
     }
 
     vtsn->stat_request_counter++;
-    vtsn->stat_in_bytes += (ngx_atomic_uint_t) r->request_length;
-    vtsn->stat_out_bytes += (ngx_atomic_uint_t) r->connection->sent;
+
+    if (state != NULL && (status < 100 || status >= 600)) {
+
+        /*
+         * An attempt carries no status of its own where it produced no
+         * response, and nginx leaves that 0. add_rc() puts anything below 200
+         * in the 1xx bucket, so it must not be handed one - the attempt would
+         * be reported as an informational response. The two other places that
+         * read this status already say the same thing: shm_add_node() takes no
+         * status code slot outside 100..599, and the response time helper
+         * gives 0 for a state with no status.
+         *
+         * It was still an attempt on this peer, so the counter above stands.
+         */
+
+        return;
+    }
 
     ngx_http_vhost_traffic_status_add_rc(status, vtsn);
 
     if (status_code_slot != -1 && vtsn->stat_status_code_counter != NULL ) {
         vtsn->stat_status_code_counter[status_code_slot]++;
     }
+
+    if (state != NULL) {
+
+        /*
+         * The rest of this describes the client request: the bytes either
+         * way, how long it took, what the cache did with it. An attempt that
+         * was passed on served no client, so it has none of them to add. Its
+         * own response time goes to the upstream queue in
+         * ngx_http_vhost_traffic_status_shm_add_node_upstream().
+         */
+
+        return;
+    }
+
+    vtsn->stat_in_bytes += (ngx_atomic_uint_t) r->request_length;
+    vtsn->stat_out_bytes += (ngx_atomic_uint_t) r->connection->sent;
 
     vtsn->stat_request_time_counter += (ngx_atomic_uint_t) ms;
 
@@ -467,14 +638,6 @@ ngx_http_vhost_traffic_status_node_time_queue_pop(
 }
 
 
-ngx_int_t
-ngx_http_vhost_traffic_status_node_time_queue_rear(
-    ngx_http_vhost_traffic_status_node_time_queue_t *q)
-{
-    return (q->rear > 0) ? (q->rear - 1) : (NGX_HTTP_VHOST_TRAFFIC_STATUS_DEFAULT_QUEUE_LEN - 1);
-}
-
-
 void
 ngx_http_vhost_traffic_status_node_time_queue_insert(
     ngx_http_vhost_traffic_status_node_time_queue_t *q,
@@ -505,6 +668,37 @@ ngx_http_vhost_traffic_status_node_time_queue_average(
     }
 
     return avg;
+}
+
+
+/*
+   Same as ngx_http_vhost_traffic_status_node_time_queue_average(), for the
+   callers that do not hold the shared memory lock: the average reinitializes
+   a queue it finds inconsistent, so it is given a copy to work on.
+
+   The copy is not atomic and the queue may be initialized while it is taken,
+   which leaves the length zero for a moment, so the snapshot is checked
+   before it is walked: the average takes the index of an entry modulo the
+   length.
+*/
+ngx_msec_t
+ngx_http_vhost_traffic_status_node_time_queue_average_ro(
+    ngx_http_vhost_traffic_status_node_time_queue_t *q,
+    ngx_int_t method, ngx_msec_t period)
+{
+    ngx_http_vhost_traffic_status_node_time_queue_t  copy;
+
+    copy = *q;
+
+    if (copy.len != NGX_HTTP_VHOST_TRAFFIC_STATUS_DEFAULT_QUEUE_LEN
+        || copy.front < 0 || copy.front >= copy.len
+        || copy.rear < 0 || copy.rear >= copy.len)
+    {
+        return 0;
+    }
+
+    return ngx_http_vhost_traffic_status_node_time_queue_average(&copy, method,
+                                                                 period);
 }
 
 

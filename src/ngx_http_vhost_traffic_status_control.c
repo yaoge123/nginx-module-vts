@@ -8,7 +8,19 @@
 #include "ngx_http_vhost_traffic_status_control.h"
 #include "ngx_http_vhost_traffic_status_display_json.h"
 #include "ngx_http_vhost_traffic_status_display.h"
+#include "ngx_http_vhost_traffic_status_upstream.h"
 
+
+/* the peer node_upstream_lookup() is after, and where the answer goes */
+typedef struct {
+    ngx_str_t                   *name;
+    ngx_http_upstream_server_t  *usn;
+} ngx_http_vhost_traffic_status_control_peer_t;
+
+
+static ngx_int_t ngx_http_vhost_traffic_status_control_peer_match(
+    ngx_http_request_t *r, ngx_http_upstream_srv_conf_t *uscf, ngx_str_t *name,
+    ngx_http_upstream_server_t *usn, void *data);
 
 static void ngx_http_vhost_traffic_status_node_status_all(
     ngx_http_vhost_traffic_status_control_t *control);
@@ -20,6 +32,9 @@ static void ngx_http_vhost_traffic_status_node_status_zone(
 static ngx_int_t ngx_http_vhost_traffic_status_node_delete_get_nodes(
     ngx_http_vhost_traffic_status_control_t *control,
     ngx_array_t **nodes, ngx_rbtree_node_t *node);
+static ngx_int_t ngx_http_vhost_traffic_status_node_expire_match(
+    ngx_http_vhost_traffic_status_control_t *control,
+    ngx_http_vhost_traffic_status_node_t *vtsn);
 static void ngx_http_vhost_traffic_status_node_delete_all(
     ngx_http_vhost_traffic_status_control_t *control);
 static void ngx_http_vhost_traffic_status_node_delete_group(
@@ -37,6 +52,46 @@ static void ngx_http_vhost_traffic_status_node_reset_zone(
     ngx_http_vhost_traffic_status_control_t *control);
 
 
+/*
+ * Fills in what the control interface answers with for the peer it is looking
+ * for, from the walk the display is written out of, so that the two cannot
+ * say different things about the same peer.
+ */
+
+static ngx_int_t
+ngx_http_vhost_traffic_status_control_peer_match(ngx_http_request_t *r,
+    ngx_http_upstream_srv_conf_t *uscf, ngx_str_t *name,
+    ngx_http_upstream_server_t *usn, void *data)
+{
+    ngx_http_vhost_traffic_status_control_peer_t  *cp = data;
+
+    if (name->len != cp->name->len
+        || ngx_strncmp(name->data, cp->name->data, name->len) != 0)
+    {
+        return NGX_OK;
+    }
+
+    *cp->usn = *usn;
+
+#if nginx_version > 1007001
+
+    /*
+     * cp->name rather than the name of the peer: the name of a peer lives in
+     * the zone of the upstream and a re-resolve can hand it back to the slab
+     * as soon as the walk releases its lock, while the caller reads this
+     * afterwards to write its answer. The two were just compared byte for
+     * byte, and cp->name belongs to the request.
+     */
+
+    cp->usn->name = *cp->name;
+#endif
+
+    /* found, and there is no reason to look at the rest of the group */
+
+    return NGX_DONE;
+}
+
+
 void
 ngx_http_vhost_traffic_status_node_upstream_lookup(
     ngx_http_vhost_traffic_status_control_t *control,
@@ -44,10 +99,10 @@ ngx_http_vhost_traffic_status_node_upstream_lookup(
 {
     ngx_int_t                       rc;
     ngx_str_t                       key, usg, ush;
-    ngx_uint_t                      i, j;
-    ngx_http_upstream_server_t     *us;
+    ngx_uint_t                      i;
     ngx_http_upstream_srv_conf_t   *uscf, **uscfp;
     ngx_http_upstream_main_conf_t  *umcf;
+    ngx_http_vhost_traffic_status_control_peer_t  cp;
 
     umcf = ngx_http_get_module_main_conf(control->r, ngx_http_upstream_module);
     uscfp = umcf->upstreams.elts;
@@ -93,25 +148,35 @@ ngx_http_vhost_traffic_status_node_upstream_lookup(
             continue;
         }
 
-        us = uscf->servers->elts;
-
         if (uscf->host.len == usg.len) {
             if (ngx_strncmp(uscf->host.data, usg.data, usg.len) == 0) {
 
-                for (j = 0; j < uscf->servers->nelts; j++) {
-                    if (us[j].addrs->name.len == ush.len) {
-                        if (ngx_strncmp(us[j].addrs->name.data, ush.data, ush.len) == 0) {
-                            *usn = us[j];
+                cp.name = &ush;
+                cp.usn = usn;
+
+                rc = ngx_http_vhost_traffic_status_upstream_peers_walk(
+                         control->r, uscf,
+                         ngx_http_vhost_traffic_status_control_peer_match, &cp);
+
+                if (rc != NGX_DONE) {
+
+                    /*
+                     * A peer the group does not hold: one a balancer_by_lua
+                     * block picked, one a re-resolve or a change of the
+                     * configuration took out. Its node is in the tree - the
+                     * caller looked it up before asking - and nothing here
+                     * knows anything else about it, so nothing else is
+                     * claimed. The display writes the same zeros.
+                     */
+
+                    ngx_memzero(usn, sizeof(ngx_http_upstream_server_t));
 
 #if nginx_version > 1007001
-                            usn->name = us[j].addrs->name;
+                    usn->name = ush;
 #endif
-
-                            control->count++;
-                            break;
-                        }
-                    }
                 }
+
+                control->count++;
 
                 break;
             }
@@ -370,6 +435,38 @@ ngx_http_vhost_traffic_status_node_status(
 
 
 static ngx_int_t
+ngx_http_vhost_traffic_status_node_expire_match(
+    ngx_http_vhost_traffic_status_control_t *control,
+    ngx_http_vhost_traffic_status_node_t *vtsn)
+{
+    ngx_msec_t  last;
+
+    /* nothing was asked for, so every node the selection matches is taken */
+
+    if (control->expire == 0) {
+        return NGX_OK;
+    }
+
+    last = vtsn->stat_last_seen;
+
+    /*
+     * The stored value is the epoch in milliseconds. ngx_msec_t is as wide as
+     * a pointer, so on a 32 bit build it wraps every 49.7 days; taking the
+     * difference in that same unsigned type stays right across the wrap,
+     * which is also what limits how large an expire can usefully be.
+     */
+
+    if ((ngx_msec_t) (ngx_http_vhost_traffic_status_current_msec() - last)
+        > control->expire)
+    {
+        return NGX_OK;
+    }
+
+    return NGX_DECLINED;
+}
+
+
+static ngx_int_t
 ngx_http_vhost_traffic_status_node_delete_get_nodes(
     ngx_http_vhost_traffic_status_control_t *control,
     ngx_array_t **nodes, ngx_rbtree_node_t *node)
@@ -384,8 +481,11 @@ ngx_http_vhost_traffic_status_node_delete_get_nodes(
     if (node != ctx->rbtree->sentinel) {
         vtsn = (ngx_http_vhost_traffic_status_node_t *) &node->color;
 
-        if ((ngx_int_t) vtsn->stat_upstream.type == control->group) {
-
+        if ((control->group == -1
+             || (ngx_int_t) vtsn->stat_upstream.type == control->group)
+            && ngx_http_vhost_traffic_status_node_expire_match(control, vtsn)
+               == NGX_OK)
+        {
             if (*nodes == NULL) {
                 *nodes = ngx_array_create(control->r->pool, 1,
                         sizeof(ngx_http_vhost_traffic_status_delete_t));
@@ -429,6 +529,7 @@ ngx_http_vhost_traffic_status_node_delete_all(
     ngx_slab_pool_t                           *shpool;
     ngx_rbtree_node_t                         *node, *sentinel;
     ngx_http_vhost_traffic_status_ctx_t       *ctx;
+    ngx_http_vhost_traffic_status_node_t      *vtsn;
     ngx_http_vhost_traffic_status_loc_conf_t  *vtscf;
 
     ctx = ngx_http_get_module_main_conf(control->r, ngx_http_vhost_traffic_status_module);
@@ -440,6 +541,9 @@ ngx_http_vhost_traffic_status_node_delete_all(
     shpool = (ngx_slab_pool_t *) vtscf->shm_zone->shm.addr;
 
     while (node != sentinel) {
+        vtsn = (ngx_http_vhost_traffic_status_node_t *) &node->color;
+
+        ngx_http_vhost_traffic_status_node_filter_account(ctx, vtsn, -1);
 
         ngx_rbtree_delete(ctx->rbtree, node);
         ngx_slab_free_locked(shpool, node);
@@ -461,6 +565,7 @@ ngx_http_vhost_traffic_status_node_delete_group(
     ngx_slab_pool_t                           *shpool;
     ngx_rbtree_node_t                         *node;
     ngx_http_vhost_traffic_status_ctx_t       *ctx;
+    ngx_http_vhost_traffic_status_node_t      *vtsn;
     ngx_http_vhost_traffic_status_delete_t    *deletes;
     ngx_http_vhost_traffic_status_loc_conf_t  *vtscf;
 
@@ -492,6 +597,10 @@ ngx_http_vhost_traffic_status_node_delete_group(
     for (i = 0; i < n; i++) {
         node = deletes[i].node;
 
+        vtsn = (ngx_http_vhost_traffic_status_node_t *) &node->color;
+
+        ngx_http_vhost_traffic_status_node_filter_account(ctx, vtsn, -1);
+
         ngx_rbtree_delete(ctx->rbtree, node);
         ngx_slab_free_locked(shpool, node);
 
@@ -510,6 +619,7 @@ ngx_http_vhost_traffic_status_node_delete_zone(
     ngx_slab_pool_t                           *shpool;
     ngx_rbtree_node_t                         *node;
     ngx_http_vhost_traffic_status_ctx_t       *ctx;
+    ngx_http_vhost_traffic_status_node_t      *vtsn;
     ngx_http_vhost_traffic_status_loc_conf_t  *vtscf;
 
     ctx = ngx_http_get_module_main_conf(control->r, ngx_http_vhost_traffic_status_module);
@@ -528,10 +638,18 @@ ngx_http_vhost_traffic_status_node_delete_zone(
     node = ngx_http_vhost_traffic_status_node_lookup(ctx->rbtree, &key, hash);
 
     if (node != NULL) {
-        ngx_rbtree_delete(ctx->rbtree, node);
-        ngx_slab_free_locked(shpool, node);
+        vtsn = (ngx_http_vhost_traffic_status_node_t *) &node->color;
 
-        control->count++;
+        if (ngx_http_vhost_traffic_status_node_expire_match(control, vtsn)
+            == NGX_OK)
+        {
+            ngx_http_vhost_traffic_status_node_filter_account(ctx, vtsn, -1);
+
+            ngx_rbtree_delete(ctx->rbtree, node);
+            ngx_slab_free_locked(shpool, node);
+
+            control->count++;
+        }
     }
 }
 
@@ -543,7 +661,21 @@ ngx_http_vhost_traffic_status_node_delete(
     switch (control->range) {
 
     case NGX_HTTP_VHOST_TRAFFIC_STATUS_CONTROL_RANGE_ALL:
-        ngx_http_vhost_traffic_status_node_delete_all(control);
+
+        /*
+         * delete_all() empties the tree by taking its root until there is
+         * none, which cannot leave anything behind. With an expire there is
+         * something to leave behind, so the walk that collects what matches
+         * is used instead; it takes every type when the group is -1.
+         */
+
+        if (control->expire) {
+            ngx_http_vhost_traffic_status_node_delete_group(control);
+
+        } else {
+            ngx_http_vhost_traffic_status_node_delete_all(control);
+        }
+
         break;
 
     case NGX_HTTP_VHOST_TRAFFIC_STATUS_CONTROL_RANGE_GROUP:

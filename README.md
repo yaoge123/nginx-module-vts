@@ -2,6 +2,7 @@ Nginx virtual host traffic status module
 ==========
 
 [![CI](https://github.com/vozlt/nginx-module-vts/actions/workflows/ci.yml/badge.svg)](https://github.com/vozlt/nginx-module-vts/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/vozlt/nginx-module-vts/badges/coverage.json)](https://github.com/vozlt/nginx-module-vts/actions/workflows/ci.yml)
 [![License](http://img.shields.io/badge/license-BSD-brightgreen.svg)](https://github.com/vozlt/nginx-module-vts/blob/master/LICENSE)
 
 Nginx virtual host traffic status module
@@ -95,6 +96,7 @@ the test requires Nginx to listen on port 80.
 
 ## Compatibility
 * Nginx
+  * 1.30.x (last tested: 1.30.4)
   * 1.27.x (last tested: 1.27.3)
   * 1.22.x (last tested: 1.22.0)
   * 1.19.x (last tested: 1.19.6)
@@ -227,7 +229,8 @@ JSON document contains as follows:
         "name":...,
         "maxSize":...,
         "usedSize":...,
-        "usedNode":...
+        "usedNode":...,
+        "freeSize":...
     },
     "serverZones": {
         "...":{
@@ -397,6 +400,7 @@ Traffic calculation as follows:
 * UpstreamZones
   * in += requested_bytes via the ServerZones
   * out += sent_bytes via the ServerZones
+  * an attempt that `proxy_next_upstream` passed on adds neither, having served no client request. It is still counted in `requestCounter` and in `responses`, and its own time in `responseMsecCounter`.
 * cacheZones
   * in += requested_bytes via the ServerZones
   * out += sent_bytes via the ServerZones
@@ -427,7 +431,7 @@ It is able to reset or delete traffic zones through a query string.
 The request responds with a JSON document.
 
 * URI Syntax
-  * /*`{status_uri}`*/control?cmd=*`{command}`*&group=*`{group}`*&zone=*`{name}`*
+  * /*`{status_uri}`*/control?cmd=*`{command}`*&group=*`{group}`*&zone=*`{name}`*\[&expire=*`{seconds}`*\]
 
 ```Nginx
 http {
@@ -465,6 +469,26 @@ The available request arguments are as follows:
     * It reset traffic zones without deleting nodes in shared memory.(= init to 0)
   * delete
     * It delete traffic zones in shared memory. when re-request recreated. 
+* **expire**=\<`time`\>
+  * Only with `delete`. Among the zones that `group` and `zone` already select,
+    it deletes the ones whose last request is older than the time given, and
+    leaves the rest. Without it every selected zone is deleted, as before.
+    `processingCounts` in the response says how many were deleted.
+  * The time is written the way it is written in the configuration: a bare
+    number is seconds, and `1h`, `30m`, `7d` say the same thing shorter.
+    `expire=0` selects everything, which is what leaving it out already does.
+  * A value that cannot be read leaves the request undone rather than falling
+    back to deleting everything selected.
+  * The age of a zone is the time of the last request it served, which is
+    recorded whether or not the request was counted, so a zone that
+    `vhost_traffic_status_ignore_status` excludes from the figures still
+    counts as in use here.
+  * The age is kept as a timestamp in milliseconds. On a 32 bit build that
+    count wraps every 49.7 days, so a zone left untouched for longer than that
+    can read as more recent than it is and be missed by one sweep.
+  * A zone restored from a dump starts as though it had been reached at the
+    restart rather than when the file was written, so a sweep straight
+    afterwards does not empty what the dump was kept for.
 * **group**=\<`server`\|`filter`\|`upstream@alone`\|`upstream@group`\|`cache`\|`*`\>
   * server
   * filter
@@ -567,6 +591,22 @@ It delete the specified zones in shared memory.
   * /status/control?cmd=delete&group=upstream@alone&zone=*
 * cacheZones
   * /status/control?cmd=delete&group=cache&zone=*
+
+#### To delete only the zones that have not been used for a while
+Nodes are not freed when an upstream goes away, so a zone that sees a lot of
+upstreams appear and disappear fills up and then refuses every new node. This
+deletes what has gone quiet and keeps what is still in use. It works on a zone
+that is already full, so it is also the way out of that state.
+
+* everything not requested for an hour
+  * /status/control?cmd=delete&group=*&zone=*&expire=1h
+* upstream peers not requested for a day
+  * /status/control?cmd=delete&group=upstream@group&zone=*&expire=1d
+* one named zone, only if it has gone quiet
+  * /status/control?cmd=delete&group=filter&zone=*`filter_group`*@*`name`*&expire=7d
+
+Nothing calls this on its own; drive it from cron or from whatever watches
+`freeSize` in `sharedZones`.
 
 #### To delete each zones
 * single zone in serverZones
@@ -673,6 +713,8 @@ The following status information is provided in the JSON format:
     * The current size of the shared memory.
   * usedNode
     * The current number of node using in shared memory. It can get an approximate size for one node with the following formula: (*usedSize* / *usedNode*)
+  * freeSize
+    * The room the shared memory has left for more nodes. *usedSize* above is the sum of the sizes of the nodes, which is not what the zone has spent, because the slab allocator hands out a whole page or a whole slot for each of them. A zone therefore stops accepting nodes while *usedSize* still reads below *maxSize*, and this is the value that says so. A node is larger than half a page, so where a page is 4k this is the room for more of them; where the page is larger it is a lower bound, since a partly used page can still hold one.
 * serverZones
   * requestCounter
     * The total number of client requests received from clients.
@@ -719,14 +761,14 @@ The following status information is provided in the JSON format:
   * server
     * An address of the server.
   * requestCounter
-    * The total number of client connections forwarded to this server.
+    * The total number of client connections forwarded to this server. A request that `proxy_next_upstream` passes on is counted against every server it was tried on, so the counters of a group add up to attempts rather than to client requests. This is the same thing `$upstream_addr` reports, which lists one address per attempt.
   * inBytes
-    * The total number of bytes received from this server.
+    * The total number of bytes received from this server. An attempt that was passed on to another server adds nothing here: these are the bytes of the client request, and such an attempt served none.
   * outBytes
-    * The total number of bytes sent to this server.
+    * The total number of bytes sent to this server. An attempt that was passed on adds nothing, for the same reason as `inBytes`.
   * responses
     * 1xx, 2xx, 3xx, 4xx, 5xx
-      * The number of responses with status codes 1xx, 2xx, 3xx, 4xx, and 5xx.
+      * The number of responses with status codes 1xx, 2xx, 3xx, 4xx, and 5xx. For an attempt that was passed on to another server this is the status of that attempt - the value `$upstream_status` logs for it, which is 502 where the connection was refused and 504 where it timed out. For the attempt that answered the client it is the status the client was sent.
   * requestMsecCounter
     * The number of accumulated request processing time including upstream in milliseconds.
   * requestMsec
@@ -742,7 +784,7 @@ The following status information is provided in the JSON format:
     * counters
       * The cumulative values for the reason that each bucket value is greater than or equal to the request processing time including upstream.
   * responseMsecCounter
-    * The number of accumulated only upstream response processing time in milliseconds.
+    * The number of accumulated only upstream response processing time in milliseconds. Each attempt contributes its own time to the server it was made on. Earlier versions gave the sum over every attempt of a request to whichever server answered it, so that server was charged for the time spent failing on the ones before it.
   * responseMsec
     * The average of only upstream response processing times in milliseconds.
   * responseMsecs
@@ -1975,16 +2017,16 @@ vhost_traffic_status_measure_status_codes all;
 
 ## Releases
 
-To cut a release, create a changelog entry PR with [git-chglog](https://github.com/git-chglog/git-chglog)
+To cut a release, create a changelog entry PR with [git-cliff](https://git-cliff.org/)
 
     version="v0.2.0"
     git checkout -b "cut-${version}"
-    git-chglog -o CHANGELOG.md --next-tag "${version}"
+    util/changelog.sh "${version}"
     git add CHANGELOG.md
     sed -i "s/NGX_HTTP_VTS_MODULE_VERSION \".*/NGX_HTTP_VTS_MODULE_VERSION \"${version}\"/" src/ngx_http_vhost_traffic_status_module.h
     git add src/ngx_http_vhost_traffic_status_module.h
-    git-chglog -t .chglog/RELNOTES.tmpl --next-tag "${version}" "${version}" | git commit -F-
-    
+    util/changelog.sh "${version}" --notes | git commit -F-
+
 After the PR is merged, create the new tag and release on the [GitHub Releases](https://github.com/vozlt/nginx-module-vts/releases).
 
 ## See Also

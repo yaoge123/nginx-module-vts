@@ -24,7 +24,7 @@
  * I.E "v0.2.0+h0a1s2h"
  *
  */
-#define NGX_HTTP_VTS_MODULE_VERSION "v0.2.5"
+#define NGX_HTTP_VTS_MODULE_VERSION "v0.2.7"
 
 #define NGX_HTTP_VHOST_TRAFFIC_STATUS_UPSTREAM_NO          0
 #define NGX_HTTP_VHOST_TRAFFIC_STATUS_UPSTREAM_UA          1
@@ -114,6 +114,46 @@
 #endif
 
 #endif
+
+/*
+ * Pairs with ngx_http_vhost_traffic_status_add_oc(): copy_oc() takes the
+ * counters before the node is updated, add_oc() compares them with the
+ * updated node afterwards. Both take the copy by address.
+ */
+#if (NGX_HTTP_CACHE)
+#define ngx_http_vhost_traffic_status_copy_oc(o, c) {                          \
+    o->stat_request_counter = c->stat_request_counter;                         \
+    o->stat_in_bytes = c->stat_in_bytes;                                       \
+    o->stat_out_bytes = c->stat_out_bytes;                                     \
+    o->stat_1xx_counter = c->stat_1xx_counter;                                 \
+    o->stat_2xx_counter = c->stat_2xx_counter;                                 \
+    o->stat_3xx_counter = c->stat_3xx_counter;                                 \
+    o->stat_4xx_counter = c->stat_4xx_counter;                                 \
+    o->stat_5xx_counter = c->stat_5xx_counter;                                 \
+    o->stat_request_time_counter = c->stat_request_time_counter;               \
+    o->stat_cache_miss_counter = c->stat_cache_miss_counter;                   \
+    o->stat_cache_bypass_counter = c->stat_cache_bypass_counter;               \
+    o->stat_cache_expired_counter = c->stat_cache_expired_counter;             \
+    o->stat_cache_stale_counter = c->stat_cache_stale_counter;                 \
+    o->stat_cache_updating_counter = c->stat_cache_updating_counter;           \
+    o->stat_cache_revalidated_counter = c->stat_cache_revalidated_counter;     \
+    o->stat_cache_hit_counter = c->stat_cache_hit_counter;                     \
+    o->stat_cache_scarce_counter = c->stat_cache_scarce_counter;               \
+}
+#else
+#define ngx_http_vhost_traffic_status_copy_oc(o, c) {                          \
+    o->stat_request_counter = c->stat_request_counter;                         \
+    o->stat_in_bytes = c->stat_in_bytes;                                       \
+    o->stat_out_bytes = c->stat_out_bytes;                                     \
+    o->stat_1xx_counter = c->stat_1xx_counter;                                 \
+    o->stat_2xx_counter = c->stat_2xx_counter;                                 \
+    o->stat_3xx_counter = c->stat_3xx_counter;                                 \
+    o->stat_4xx_counter = c->stat_4xx_counter;                                 \
+    o->stat_5xx_counter = c->stat_5xx_counter;                                 \
+    o->stat_request_time_counter = c->stat_request_time_counter;               \
+}
+#endif
+
 
 #if (NGX_HTTP_CACHE)
 #define ngx_http_vhost_traffic_status_add_oc(o, c) {                           \
@@ -237,6 +277,20 @@
 )
 
 
+/*
+   What lives in the zone. The tree is first: shpool->data has always pointed
+   at it, and keeping it there means the pointer still means the same thing
+   to a build that does not know about the rest - which is only reachable on
+   win32, where an existing segment can outlive the binary that made it. The
+   signature will not match there, and the count is made again.
+*/
+typedef struct {
+    ngx_rbtree_t                            rbtree;
+    ngx_atomic_t                            filter_nodes;
+    ngx_atomic_t                            signature;
+} ngx_http_vhost_traffic_status_shm_t;
+
+
 typedef struct {
     ngx_rbtree_t                           *rbtree;
 
@@ -253,6 +307,18 @@ typedef struct {
     ngx_array_t                            *filter_max_node_matches;
 
     ngx_uint_t                              filter_max_node;
+
+    /*
+       What the cap counts, in the zone rather than walked for. signature
+       says which configuration the count belongs to: a reload that changes
+       the cap or the groups it names leaves a count of the wrong population,
+       and the worker that notices counts again. Both are read and written
+       under the mutex of the zone.
+    */
+    ngx_http_vhost_traffic_status_shm_t    *shm;
+
+    /* the signature this configuration expects, settled while it is read */
+    uint32_t                                signature;
 
     ngx_flag_t                              enable;
     ngx_flag_t                              filter_check_duplicate;
@@ -295,6 +361,15 @@ typedef struct {
     ngx_array_t                            *limit_filter_traffics;
 
     ngx_http_vhost_traffic_status_node_t    stats;
+
+    /*
+     * End of the response buffer currently being filled by the display
+     * handlers. It is set right after the buffer is created and is used by
+     * ngx_http_vhost_traffic_status_display_buffer_check() to make sure that
+     * a node never writes past the end of the buffer.
+     */
+    u_char                                 *display_buf_end;
+
     ngx_msec_t                              start_msec;
     ngx_flag_t                              format;
     ngx_str_t                               jsonp;
@@ -312,13 +387,25 @@ typedef struct {
     ngx_flag_t                              stats_by_upstream;
     ngx_uint_t                              ignore_status;
 
-    ngx_rbtree_node_t                     **node_caches;
 } ngx_http_vhost_traffic_status_loc_conf_t;
 
 
+/* these take the ctx, which is declared above, so they live here */
+ngx_int_t ngx_http_vhost_traffic_status_node_filter_counted(
+    ngx_http_vhost_traffic_status_ctx_t *ctx,
+    ngx_http_vhost_traffic_status_node_t *vtsn);
+void ngx_http_vhost_traffic_status_node_filter_account(
+    ngx_http_vhost_traffic_status_ctx_t *ctx,
+    ngx_http_vhost_traffic_status_node_t *vtsn, ngx_int_t delta);
+ngx_int_t ngx_http_vhost_traffic_status_filter_max_node_match_ctx(
+    ngx_http_vhost_traffic_status_ctx_t *ctx, ngx_str_t *filter);
+uint32_t ngx_http_vhost_traffic_status_filter_max_node_signature(
+    ngx_http_vhost_traffic_status_ctx_t *ctx);
+
 ngx_msec_t ngx_http_vhost_traffic_status_current_msec(void);
 ngx_msec_int_t ngx_http_vhost_traffic_status_request_time(ngx_http_request_t *r);
-ngx_msec_int_t ngx_http_vhost_traffic_status_upstream_response_time(ngx_http_request_t *r);
+ngx_msec_int_t ngx_http_vhost_traffic_status_upstream_state_response_time(
+    ngx_http_upstream_state_t *state);
 
 extern ngx_module_t ngx_http_vhost_traffic_status_module;
 
