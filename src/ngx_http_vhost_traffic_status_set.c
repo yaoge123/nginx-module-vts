@@ -184,6 +184,70 @@ ngx_http_vhost_traffic_status_set_by_filter_node_member(
     {
         return vtsn->stat_cache_scarce_counter;
     }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheMissDownstreamOutBytes") == 0)
+    {
+        return vtsn->stat_cache_miss_downstream_out_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheMissUpstreamInBytes") == 0)
+    {
+        return vtsn->stat_cache_miss_upstream_in_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheBypassDownstreamOutBytes") == 0)
+    {
+        return vtsn->stat_cache_bypass_downstream_out_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheBypassUpstreamInBytes") == 0)
+    {
+        return vtsn->stat_cache_bypass_upstream_in_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheExpiredDownstreamOutBytes") == 0)
+    {
+        return vtsn->stat_cache_expired_downstream_out_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheExpiredUpstreamInBytes") == 0)
+    {
+        return vtsn->stat_cache_expired_upstream_in_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheStaleDownstreamOutBytes") == 0)
+    {
+        return vtsn->stat_cache_stale_downstream_out_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheStaleUpstreamInBytes") == 0)
+    {
+        return vtsn->stat_cache_stale_upstream_in_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheUpdatingDownstreamOutBytes") == 0)
+    {
+        return vtsn->stat_cache_updating_downstream_out_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheUpdatingUpstreamInBytes") == 0)
+    {
+        return vtsn->stat_cache_updating_upstream_in_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheRevalidatedDownstreamOutBytes") == 0)
+    {
+        return vtsn->stat_cache_revalidated_downstream_out_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheRevalidatedUpstreamInBytes") == 0)
+    {
+        return vtsn->stat_cache_revalidated_upstream_in_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheHitDownstreamOutBytes") == 0)
+    {
+        return vtsn->stat_cache_hit_downstream_out_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheHitUpstreamInBytes") == 0)
+    {
+        return vtsn->stat_cache_hit_upstream_in_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheScarceDownstreamOutBytes") == 0)
+    {
+        return vtsn->stat_cache_scarce_downstream_out_bytes;
+    }
+    else if (ngx_http_vhost_traffic_status_node_member_cmp(member, "cacheScarceUpstreamInBytes") == 0)
+    {
+        return vtsn->stat_cache_scarce_upstream_in_bytes;
+    }
 #endif
 
     switch (control->group) {

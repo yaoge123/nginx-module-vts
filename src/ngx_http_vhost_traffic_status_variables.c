@@ -101,6 +101,86 @@ static ngx_http_variable_t  ngx_http_vhost_traffic_status_vars[] = {
       ngx_http_vhost_traffic_status_node_variable,
       offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_scarce_counter),
       NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_miss_downstream_out_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_miss_downstream_out_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_miss_upstream_in_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_miss_upstream_in_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_bypass_downstream_out_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_bypass_downstream_out_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_bypass_upstream_in_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_bypass_upstream_in_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_expired_downstream_out_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_expired_downstream_out_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_expired_upstream_in_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_expired_upstream_in_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_stale_downstream_out_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_stale_downstream_out_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_stale_upstream_in_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_stale_upstream_in_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_updating_downstream_out_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_updating_downstream_out_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_updating_upstream_in_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_updating_upstream_in_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_revalidated_downstream_out_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_revalidated_downstream_out_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_revalidated_upstream_in_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_revalidated_upstream_in_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_hit_downstream_out_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_hit_downstream_out_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_hit_upstream_in_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_hit_upstream_in_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_scarce_downstream_out_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_scarce_downstream_out_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
+
+    { ngx_string("vts_cache_scarce_upstream_in_bytes"), NULL,
+      ngx_http_vhost_traffic_status_node_variable,
+      offsetof(ngx_http_vhost_traffic_status_node_t, stat_cache_scarce_upstream_in_bytes),
+      NGX_HTTP_VAR_NOCACHEABLE, 0 },
 #endif
 
     { ngx_null_string, NULL, NULL, 0, 0, 0 }

@@ -1,6 +1,12 @@
 <a name="unreleased"></a>
 ## [Unreleased]
 
+### Feat
+- count bytes sent to clients and read from upstream per cache status
+
+### Changed
+- the VTS shared-memory node layout changed for the per-cache-status byte counters; when replacing the module/binary, restart nginx instead of reloading it
+
 
 ## [v0.2.7] - 2026-08-09
 ### Chore

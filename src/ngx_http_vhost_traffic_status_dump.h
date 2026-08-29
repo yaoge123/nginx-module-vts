@@ -16,7 +16,7 @@
  * ngx_http_vhost_traffic_status_node_t changes layout, even when sizeof()
  * happens to stay the same.
  */
-#define NGX_HTTP_VHOST_TRAFFIC_STATUS_DUMP_FORMAT_VERSION    1
+#define NGX_HTTP_VHOST_TRAFFIC_STATUS_DUMP_FORMAT_VERSION    2
 
 /* pre-version dumps carried nginx_version here and had no node_size field */
 #define NGX_HTTP_VHOST_TRAFFIC_STATUS_DUMP_LEGACY_HEADER_SIZE           \
