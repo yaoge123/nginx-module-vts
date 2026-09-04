@@ -1,6 +1,9 @@
 <a name="unreleased"></a>
 ## [Unreleased]
 
+### Fix
+- pass the cache-zone overCounts arguments in the same order as the JSON format
+
 
 ## [v0.2.7] - 2026-08-09
 ### Chore
