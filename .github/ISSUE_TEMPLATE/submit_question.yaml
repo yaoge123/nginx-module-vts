@@ -33,3 +33,23 @@ body:
       label: Reproducible Example nginx.conf
       description: >	
         Please paste the reproducible nginx.conf
+  - type: dropdown
+    id: assistance-disclosure
+    attributes:
+      label: Assistance Disclosure
+      description: >
+        The use of AI/LLM tools is allowed, so long as it is disclosed. Knowing
+        how this was produced helps us respond to it properly; it does not count
+        against you. Please say whether any such tooling was used here.
+      options:
+        - AI used
+        - AI not used
+    validations:
+      required: true
+  - type: input
+    id: assistance-description
+    attributes:
+      label: If AI was used, describe the extent to which it was used.
+      placeholder: >
+        Examples: "Claude produced the reproduction", "ChatGPT translated this
+        from my native language", "the report is entirely generated"
